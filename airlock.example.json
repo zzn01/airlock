@@ -1,0 +1,20 @@
+{
+  "listen": ":8080",
+  "clients": [
+    {
+      "id": "llm-assistant",
+      "token": "replace-with-a-strong-secret-token",
+      "allow": ["redis.get", "redis.scan", "redis.exists", "redis.ttl"],
+      "rate_limit": { "rps": 10, "burst": 20 }
+    },
+    {
+      "id": "llm-readonly-cache-peek",
+      "token": "another-strong-secret-token",
+      "allow": ["redis.get"],
+      "rate_limit": { "rps": 2, "burst": 5 }
+    }
+  ],
+  "backends": {
+    "redis": { "addr": "127.0.0.1:6379" }
+  }
+}
