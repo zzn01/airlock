@@ -5,8 +5,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/zzn01/airlock/internal/backend/httpproxy"
 	"github.com/zzn01/airlock/internal/config"
 )
+
+func TestExampleConfigLoadsAndBuilds(t *testing.T) {
+	cfg, err := config.Load("../../airlock.example.json", map[string]string{})
+	if err != nil {
+		t.Fatalf("load example config: %v", err)
+	}
+	if _, err := Build(cfg, nil); err != nil {
+		t.Fatalf("build from example config: %v", err)
+	}
+}
 
 func TestBuildWiresRedisBackendAndAuth(t *testing.T) {
 	cfg := &config.Config{
@@ -14,7 +25,7 @@ func TestBuildWiresRedisBackendAndAuth(t *testing.T) {
 			ID: "llm-1", Token: "tok", Allow: []string{"redis.get"},
 			RateLimit: config.RateLimit{RPS: 10, Burst: 10},
 		}},
-		Backends: map[string]config.Backend{"redis": {Addr: "127.0.0.1:6379"}},
+		Backends: config.Backends{Redis: &config.RedisBackend{Addr: "127.0.0.1:6379"}},
 	}
 	g, err := Build(cfg, nil)
 	if err != nil {
@@ -35,9 +46,26 @@ func TestBuildWiresRedisBackendAndAuth(t *testing.T) {
 	}
 }
 
-func TestBuildRequiresRedisBackend(t *testing.T) {
+func TestBuildRequiresAtLeastOneBackend(t *testing.T) {
 	cfg := &config.Config{Clients: []config.Client{{ID: "a", Token: "t"}}}
 	if _, err := Build(cfg, nil); err == nil {
-		t.Error("expected error when redis backend is not configured")
+		t.Error("expected error when no backend is configured")
+	}
+}
+
+func TestBuildWiresHTTPProxyWithoutRedis(t *testing.T) {
+	cfg := &config.Config{
+		Groups: []string{"sre"},
+		Clients: []config.Client{{
+			ID: "llm-1", Token: "tok", Groups: []string{"sre"},
+			RateLimit: config.RateLimit{RPS: 10, Burst: 10},
+		}},
+		Backends: config.Backends{HTTPProxy: []httpproxy.Config{{
+			Name: "prom", Type: "prometheus", BaseURL: "http://prometheus.invalid",
+			AllowedGroups: []string{"sre"},
+		}}},
+	}
+	if _, err := Build(cfg, nil); err != nil {
+		t.Fatalf("Build with only httpproxy should succeed: %v", err)
 	}
 }

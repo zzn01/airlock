@@ -8,20 +8,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/zzn01/airlock/internal/backend/httpproxy"
 )
 
 // Config is the top-level airlock configuration.
 type Config struct {
-	Listen   string             `json:"listen"`
-	Clients  []Client           `json:"clients"`
-	Backends map[string]Backend `json:"backends"`
+	Listen   string   `json:"listen"`
+	Groups   []string `json:"groups"`
+	Clients  []Client `json:"clients"`
+	Backends Backends `json:"backends"`
 }
 
-// Client is an authenticated caller: a token, an identity, an explicit
-// allowlist of operation ids, and a rate limit.
+// Backends holds the configured backends. Both are optional, but at least one
+// must be present (enforced by gateway.Build).
+type Backends struct {
+	Redis     *RedisBackend      `json:"redis"`
+	HTTPProxy []httpproxy.Config `json:"httpproxy"`
+}
+
+// RedisBackend is the read-only Redis tool's connection config.
+type RedisBackend struct {
+	Addr string `json:"addr"`
+}
+
+// Client is an authenticated caller: a token, an identity, the groups it
+// belongs to, an explicit allowlist of legacy operation ids (Redis), and a
+// rate limit. Group membership decides access to httpproxy backends.
 type Client struct {
 	ID        string    `json:"id"`
 	Token     string    `json:"token"`
+	Groups    []string  `json:"groups"`
 	Allow     []string  `json:"allow"`
 	RateLimit RateLimit `json:"rate_limit"`
 }
@@ -31,11 +48,6 @@ type Client struct {
 type RateLimit struct {
 	RPS   float64 `json:"rps"`
 	Burst float64 `json:"burst"`
-}
-
-// Backend is a backend definition (e.g. a Redis address).
-type Backend struct {
-	Addr string `json:"addr"`
 }
 
 // Allowed reports whether the client's allowlist permits the given operation
@@ -72,18 +84,57 @@ func Load(path string, env map[string]string) (*Config, error) {
 		cfg.Listen = v
 	}
 
-	seen := make(map[string]string, len(cfg.Clients))
-	for _, c := range cfg.Clients {
-		if c.Token == "" {
-			return nil, fmt.Errorf("client %q has an empty token", c.ID)
-		}
-		if other, dup := seen[c.Token]; dup {
-			return nil, fmt.Errorf("clients %q and %q share a token", other, c.ID)
-		}
-		seen[c.Token] = c.ID
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// validate enforces token uniqueness and that every referenced group is
+// defined, so a typo in a group name fails loudly rather than silently denying.
+func (c *Config) validate() error {
+	defined := make(map[string]bool, len(c.Groups))
+	for _, g := range c.Groups {
+		defined[g] = true
 	}
 
-	return &cfg, nil
+	seen := make(map[string]string, len(c.Clients))
+	for _, cl := range c.Clients {
+		if cl.Token == "" {
+			return fmt.Errorf("client %q has an empty token", cl.ID)
+		}
+		if other, dup := seen[cl.Token]; dup {
+			return fmt.Errorf("clients %q and %q share a token", other, cl.ID)
+		}
+		seen[cl.Token] = cl.ID
+		for _, g := range cl.Groups {
+			if !defined[g] {
+				return fmt.Errorf("client %q references undefined group %q", cl.ID, g)
+			}
+		}
+	}
+
+	names := make(map[string]bool, len(c.Backends.HTTPProxy))
+	for _, b := range c.Backends.HTTPProxy {
+		if b.Name == "" {
+			return fmt.Errorf("httpproxy backend has an empty name")
+		}
+		if names[b.Name] {
+			return fmt.Errorf("duplicate httpproxy instance name %q", b.Name)
+		}
+		names[b.Name] = true
+		for _, g := range b.AllowedGroups {
+			if !defined[g] {
+				return fmt.Errorf("httpproxy %q allowed_groups references undefined group %q", b.Name, g)
+			}
+		}
+		for _, gr := range b.Grants {
+			if !defined[gr.Group] {
+				return fmt.Errorf("httpproxy %q grant references undefined group %q", b.Name, gr.Group)
+			}
+		}
+	}
+	return nil
 }
 
 // ClientByToken returns the client owning token. An empty token never resolves.

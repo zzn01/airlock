@@ -1,20 +1,91 @@
 {
   "listen": ":8080",
+  "groups": ["team-checkout", "team-payments", "sre"],
   "clients": [
     {
-      "id": "llm-assistant",
+      "id": "checkout-bot",
       "token": "replace-with-a-strong-secret-token",
-      "allow": ["redis.get", "redis.scan", "redis.exists", "redis.ttl"],
+      "groups": ["team-checkout"],
+      "allow": ["redis.get"],
       "rate_limit": { "rps": 10, "burst": 20 }
     },
     {
-      "id": "llm-readonly-cache-peek",
+      "id": "payments-bot",
       "token": "another-strong-secret-token",
-      "allow": ["redis.get"],
-      "rate_limit": { "rps": 2, "burst": 5 }
+      "groups": ["team-payments"],
+      "rate_limit": { "rps": 10, "burst": 20 }
+    },
+    {
+      "id": "sre-observer",
+      "token": "a-third-strong-secret-token",
+      "groups": ["sre"],
+      "rate_limit": { "rps": 5, "burst": 10 }
     }
   ],
   "backends": {
-    "redis": { "addr": "127.0.0.1:6379" }
+    "redis": { "addr": "127.0.0.1:6379" },
+    "httpproxy": [
+      {
+        "name": "victorialogs-a",
+        "type": "victorialogs",
+        "base_url": "http://victorialogs-a.internal:9428",
+        "allowed_groups": ["team-checkout"],
+        "max_response_bytes": 1048576,
+        "max_result_limit": 1000,
+        "result_limit_param": "limit",
+        "grants": [
+          {
+            "group": "team-checkout",
+            "endpoints": ["vl.query", "vl.hits"],
+            "scope": {
+              "victorialogs": {
+                "account_id": "1",
+                "project_id": "10",
+                "mandatory_filter": "app:\"checkout\""
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "victorialogs-b",
+        "type": "victorialogs",
+        "base_url": "http://victorialogs-b.internal:9428",
+        "allowed_groups": ["team-payments"],
+        "max_response_bytes": 1048576,
+        "max_result_limit": 500,
+        "result_limit_param": "limit",
+        "grants": [
+          {
+            "group": "team-payments",
+            "endpoints": ["vl.query"],
+            "scope": {
+              "victorialogs": {
+                "account_id": "2",
+                "project_id": "20",
+                "mandatory_filter": "app:\"payments\""
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "grafana-main",
+        "type": "grafana",
+        "base_url": "http://grafana.internal:3000",
+        "allowed_groups": ["sre"],
+        "max_response_bytes": 2097152,
+        "upstream_auth": {
+          "Authorization": "Bearer replace-with-grafana-readonly-service-account-token"
+        },
+        "grants": [
+          {
+            "group": "sre",
+            "endpoints": ["grafana.search", "grafana.dashboard_get", "grafana.ds_query"],
+            "scope": {}
+          }
+        ]
+      }
+    ]
   }
 }

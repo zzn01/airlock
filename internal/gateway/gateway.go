@@ -9,22 +9,28 @@ import (
 
 	"github.com/zzn01/airlock/internal/audit"
 	"github.com/zzn01/airlock/internal/backend"
+	"github.com/zzn01/airlock/internal/backend/httpproxy"
 	"github.com/zzn01/airlock/internal/config"
 	"github.com/zzn01/airlock/internal/ratelimit"
 )
+
+// proxyPrefix is the namespace under which httpproxy instances are addressed.
+// The first path segment after it names exactly one instance.
+const proxyPrefix = "/b/"
 
 // Gateway is the single authenticating entry point for the LLM side.
 type Gateway struct {
 	cfg     *config.Config
 	reg     *backend.Registry
+	proxies *httpproxy.Manager
 	limiter *ratelimit.Limiter
 	logger  *slog.Logger
 }
 
 // New constructs a Gateway. None of the arguments may be nil except logger,
 // which when nil disables audit logging.
-func New(cfg *config.Config, reg *backend.Registry, limiter *ratelimit.Limiter, logger *slog.Logger) *Gateway {
-	return &Gateway{cfg: cfg, reg: reg, limiter: limiter, logger: logger}
+func New(cfg *config.Config, reg *backend.Registry, proxies *httpproxy.Manager, limiter *ratelimit.Limiter, logger *slog.Logger) *Gateway {
+	return &Gateway{cfg: cfg, reg: reg, proxies: proxies, limiter: limiter, logger: logger}
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code an
@@ -67,6 +73,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ev.ClientID = client.ID
 
+	// httpproxy instances live under /b/<name>/...; they use the group-based
+	// authorization + data-scoping pipeline rather than the legacy op registry.
+	if strings.HasPrefix(r.URL.Path, proxyPrefix) {
+		g.serveProxy(w, r, ev, client)
+		return
+	}
+
 	// [2] Route — explicit endpoint addressing, no wildcard forwarding.
 	op, ok := g.reg.Lookup(r.Method, r.URL.Path)
 	if !ok {
@@ -95,6 +108,66 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// [6] Audit the allowed request and its outcome.
+	ev.Decision = audit.Allow
+	ev.Status = rec.status
+	audit.Log(g.logger, ev)
+}
+
+// serveProxy is the group-based pipeline for httpproxy backends:
+//
+//	resolve instance (strict per-instance boundary) → coarse group gate →
+//	endpoint allowlist → grant (default deny) → rate limit → scoped proxy.
+func (g *Gateway) serveProxy(w http.ResponseWriter, r *http.Request, ev audit.Event, client config.Client) {
+	rest := strings.TrimPrefix(r.URL.Path, proxyPrefix)
+	name, up, _ := strings.Cut(rest, "/")
+	if name == "" {
+		g.deny(w, ev, http.StatusNotFound, "unknown_backend")
+		return
+	}
+	upstreamPath := "/" + up
+
+	// Resolve exactly one instance by name. There is no merged global path
+	// table: the upstream path is matched only against this instance.
+	inst, ok := g.proxies.Instance(name)
+	if !ok {
+		g.deny(w, ev, http.StatusNotFound, "unknown_backend")
+		return
+	}
+	ev.Operation = name
+
+	// Coarse gate: the client's groups must intersect the instance's
+	// allowed_groups, else the backend is entirely off-limits.
+	effective := inst.Effective(client.Groups)
+	if len(effective) == 0 {
+		g.deny(w, ev, http.StatusForbidden, "group_denied")
+		return
+	}
+
+	// Endpoint must be in this instance's read-only allowlist.
+	ep, ok := inst.MatchEndpoint(r.Method, upstreamPath)
+	if !ok {
+		g.deny(w, ev, http.StatusForbidden, "endpoint_not_allowed")
+		return
+	}
+	ev.Operation = name + ":" + ep.ID
+
+	// Some grant for an effective group must authorize this endpoint.
+	grant, ok := inst.Grant(effective, ep.ID)
+	if !ok {
+		g.deny(w, ev, http.StatusForbidden, "not_granted")
+		return
+	}
+
+	if !g.limiter.Allow(client.ID, client.RateLimit.RPS, client.RateLimit.Burst) {
+		g.deny(w, ev, http.StatusTooManyRequests, "rate_limited")
+		return
+	}
+
+	rec := &statusRecorder{ResponseWriter: w}
+	inst.Proxy(rec, r, upstreamPath, ep, grant)
+	if rec.status == 0 {
+		rec.status = http.StatusOK
+	}
 	ev.Decision = audit.Allow
 	ev.Status = rec.status
 	audit.Log(g.logger, ev)
