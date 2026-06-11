@@ -48,11 +48,18 @@ deny=WARN) with client id, operation, decision, reason, and status.
 
 ## Packages
 
-- `cmd/airlock` — entry point; loads config and serves the gateway.
+- `cmd/airlock` — entry point; loads config, serves the gateway via
+  `Gateway.Handler()`, and shuts down gracefully (drains in-flight requests
+  within a bounded timeout) on SIGINT/SIGTERM.
 - `internal/config` — JSON config model + loader. `AIRLOCK_CONFIG` selects the
   file (default `airlock.json`); `AIRLOCK_LISTEN` overrides the listen address.
+  `Config.Validate` fails fast at startup on a malformed config (`config.go`);
+  `resolve.go` resolves `env:`/`file:` secret references before validation.
 - `internal/gateway` — the request pipeline (`Gateway`) and the composition root
-  (`Build`) that wires config + backends into an `http.Handler`.
+  (`Build`) that wires config + backends into an `http.Handler`. `Handler()`
+  (`health.go`) serves the unauthenticated `/healthz` (liveness) and `/readyz`
+  (readiness) probes outside the auth pipeline, falling through to the gated
+  pipeline for everything else.
 - `internal/backend` — the `Operation`/`Backend` model and a route `Registry`.
 - `internal/backend/httpproxy` — read-only HTTP reverse-proxy backend type.
   Multiple named `Instance`s (via a `Manager`), each with its own `base_url`,
@@ -85,6 +92,10 @@ Redis, `rate_limit{rps,burst}`), and `backends`:
   query_param}`.
 
 At least one backend (redis or httpproxy) must be configured.
+
+Secret-bearing values (client `token`s, `upstream_auth` values) may be given as
+`env:NAME` or `file:/path` references, resolved at load (plaintext still works).
+See the README for the scheme.
 
 ## Design
 

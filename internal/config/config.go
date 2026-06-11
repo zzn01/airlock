@@ -84,15 +84,24 @@ func Load(path string, env map[string]string) (*Config, error) {
 		cfg.Listen = v
 	}
 
-	if err := cfg.validate(); err != nil {
+	// Resolve env:/file: secret references before validation so that
+	// uniqueness and non-empty checks see the effective plaintext values.
+	if err := cfg.resolveSecrets(get); err != nil {
+		return nil, err
+	}
+
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
-// validate enforces token uniqueness and that every referenced group is
-// defined, so a typo in a group name fails loudly rather than silently denying.
-func (c *Config) validate() error {
+// Validate fails fast on a malformed configuration: unknown backend types,
+// duplicate backend instance names, missing required fields (e.g. base_url),
+// references to undefined groups, and clients with empty or duplicate tokens.
+// It is invoked by Load at startup so a typo fails loudly rather than silently
+// denying (or, worse, silently widening) access at request time.
+func (c *Config) Validate() error {
 	defined := make(map[string]bool, len(c.Groups))
 	for _, g := range c.Groups {
 		defined[g] = true
@@ -116,8 +125,10 @@ func (c *Config) validate() error {
 
 	names := make(map[string]bool, len(c.Backends.HTTPProxy))
 	for _, b := range c.Backends.HTTPProxy {
-		if b.Name == "" {
-			return fmt.Errorf("httpproxy backend has an empty name")
+		// Static, construction-independent invariants (name, known type,
+		// usable base_url) are owned by the backend type itself.
+		if err := b.Validate(); err != nil {
+			return err
 		}
 		if names[b.Name] {
 			return fmt.Errorf("duplicate httpproxy instance name %q", b.Name)

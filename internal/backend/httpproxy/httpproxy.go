@@ -116,6 +116,22 @@ type Config struct {
 	Grants           []Grant           `json:"grants"`
 }
 
+// Validate checks the static, construction-independent invariants of a backend
+// config: a non-empty name, a known service type, and a usable base URL. It is
+// the fail-fast check run at config load, before any instance is constructed.
+func (c Config) Validate() error {
+	if c.Name == "" {
+		return fmt.Errorf("httpproxy backend has an empty name")
+	}
+	if err := validateType(c.Type); err != nil {
+		return fmt.Errorf("httpproxy %q: %w", c.Name, err)
+	}
+	if _, err := parseBaseURL(c.BaseURL); err != nil {
+		return fmt.Errorf("httpproxy %q: %w", c.Name, err)
+	}
+	return nil
+}
+
 // combineLogsQL AND-joins a mandatory filter with the client's query. Both
 // sides are parenthesized so the client term cannot break out (e.g. with OR) of
 // the mandatory constraint.
