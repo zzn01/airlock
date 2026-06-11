@@ -127,6 +127,28 @@ func TestLoadRejectsUndefinedGrantGroup(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownBackendType(t *testing.T) {
+	bad := `{
+	  "groups":["team-a"],
+	  "clients":[{"id":"a","token":"x","groups":["team-a"]}],
+	  "backends":{"httpproxy":[{"name":"vl","type":"mystery","base_url":"http://x","allowed_groups":["team-a"]}]}
+	}`
+	if _, err := Load(writeTemp(t, bad), nil); err == nil {
+		t.Error("expected error: unknown backend type")
+	}
+}
+
+func TestLoadRejectsMissingBaseURL(t *testing.T) {
+	bad := `{
+	  "groups":["team-a"],
+	  "clients":[{"id":"a","token":"x","groups":["team-a"]}],
+	  "backends":{"httpproxy":[{"name":"vl","type":"victorialogs","allowed_groups":["team-a"]}]}
+	}`
+	if _, err := Load(writeTemp(t, bad), nil); err == nil {
+		t.Error("expected error: backend base_url is required")
+	}
+}
+
 func TestLoadRejectsDuplicateBackendInstanceName(t *testing.T) {
 	bad := `{
 	  "groups":["team-a"],
