@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/zzn01/airlock/internal/audit"
 	"github.com/zzn01/airlock/internal/backend"
@@ -25,12 +26,16 @@ type Gateway struct {
 	proxies *httpproxy.Manager
 	limiter *ratelimit.Limiter
 	logger  *slog.Logger
+	ready   atomic.Bool // readiness reported by /readyz; see Handler.
 }
 
 // New constructs a Gateway. None of the arguments may be nil except logger,
-// which when nil disables audit logging.
+// which when nil disables audit logging. The gateway starts ready: by the time
+// New is called, config has been loaded and validated.
 func New(cfg *config.Config, reg *backend.Registry, proxies *httpproxy.Manager, limiter *ratelimit.Limiter, logger *slog.Logger) *Gateway {
-	return &Gateway{cfg: cfg, reg: reg, proxies: proxies, limiter: limiter, logger: logger}
+	g := &Gateway{cfg: cfg, reg: reg, proxies: proxies, limiter: limiter, logger: logger}
+	g.ready.Store(true)
+	return g
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code an
