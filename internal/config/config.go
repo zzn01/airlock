@@ -8,16 +8,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/zzn01/airlock/internal/backend/httpproxy"
 )
 
 // Config is the top-level airlock configuration.
 type Config struct {
-	Listen   string   `json:"listen"`
-	Groups   []string `json:"groups"`
-	Clients  []Client `json:"clients"`
-	Backends Backends `json:"backends"`
+	Listen   string     `json:"listen"`
+	Groups   []string   `json:"groups"`
+	Clients  []Client   `json:"clients"`
+	Backends Backends   `json:"backends"`
+	MCP      *MCPServer `json:"mcp"`
+}
+
+// MCPServer configures the optional MCP (Model Context Protocol) front-end. It
+// runs alongside the HTTP gateway on its own listen address and path and reuses
+// the same access-control core. When nil or disabled, only the HTTP gateway is
+// served.
+type MCPServer struct {
+	Enable bool   `json:"enable"`
+	Listen string `json:"listen"` // default ":8081" (applied by the caller)
+	Path   string `json:"path"`   // default "/mcp" (applied by the caller)
 }
 
 // Backends holds the configured backends. Both are optional, but at least one
@@ -144,6 +156,10 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("httpproxy %q grant references undefined group %q", b.Name, gr.Group)
 			}
 		}
+	}
+
+	if c.MCP != nil && c.MCP.Enable && c.MCP.Path != "" && !strings.HasPrefix(c.MCP.Path, "/") {
+		return fmt.Errorf("mcp path %q must begin with %q", c.MCP.Path, "/")
 	}
 	return nil
 }

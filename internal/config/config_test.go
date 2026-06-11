@@ -35,6 +35,34 @@ func writeTemp(t *testing.T, body string) string {
 	return p
 }
 
+func TestLoadParsesMCPSection(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "mcp": {"enable": true, "listen": ":9000", "path": "/mcp"}
+	}`
+	cfg, err := Load(writeTemp(t, body), nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MCP == nil || !cfg.MCP.Enable || cfg.MCP.Listen != ":9000" || cfg.MCP.Path != "/mcp" {
+		t.Errorf("mcp = %+v, want enabled :9000 /mcp", cfg.MCP)
+	}
+}
+
+func TestLoadRejectsMCPPathWithoutLeadingSlash(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "mcp": {"enable": true, "path": "mcp"}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err == nil {
+		t.Fatal("expected error for mcp path without leading slash, got nil")
+	}
+}
+
 func TestLoadParsesClientsAndBackends(t *testing.T) {
 	cfg, err := Load(writeTemp(t, sample), nil)
 	if err != nil {
