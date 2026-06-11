@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zzn01/airlock/internal/backend"
+	"github.com/zzn01/airlock/internal/backend/httpproxy"
 	"github.com/zzn01/airlock/internal/backend/redisro"
 	"github.com/zzn01/airlock/internal/config"
 	"github.com/zzn01/airlock/internal/ratelimit"
@@ -50,7 +51,7 @@ func buildGateway(t *testing.T, rps, burst float64) (*Gateway, *bytes.Buffer) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	now := time.Unix(0, 0)
-	g := New(cfg, reg, ratelimit.New(func() time.Time { return now }), logger)
+	g := New(cfg, reg, httpproxy.NewManager(), ratelimit.New(func() time.Time { return now }), logger)
 	return g, &logBuf
 }
 

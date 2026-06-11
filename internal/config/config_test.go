@@ -8,10 +8,22 @@ import (
 
 const sample = `{
   "listen": ":8080",
+  "groups": ["team-a", "team-b"],
   "clients": [
-    {"id": "llm-1", "token": "tok-abc", "allow": ["redis.get", "redis.scan"], "rate_limit": {"rps": 10, "burst": 20}}
+    {"id": "llm-1", "token": "tok-abc", "groups": ["team-a"], "allow": ["redis.get", "redis.scan"], "rate_limit": {"rps": 10, "burst": 20}}
   ],
-  "backends": {"redis": {"addr": "localhost:6379"}}
+  "backends": {
+    "redis": {"addr": "localhost:6379"},
+    "httpproxy": [
+      {
+        "name": "victorialogs-a",
+        "type": "victorialogs",
+        "base_url": "http://vl-a:9428",
+        "allowed_groups": ["team-a"],
+        "grants": [{"group": "team-a", "endpoints": ["vl.query"], "scope": {"victorialogs": {"account_id": "1", "mandatory_filter": "app:\"a\""}}}]
+      }
+    ]
+  }
 }`
 
 func writeTemp(t *testing.T, body string) string {
@@ -38,11 +50,17 @@ func TestLoadParsesClientsAndBackends(t *testing.T) {
 	if c.ID != "llm-1" || c.Token != "tok-abc" {
 		t.Errorf("client = %+v, want id llm-1 token tok-abc", c)
 	}
+	if len(c.Groups) != 1 || c.Groups[0] != "team-a" {
+		t.Errorf("client groups = %v, want [team-a]", c.Groups)
+	}
 	if c.RateLimit.RPS != 10 || c.RateLimit.Burst != 20 {
 		t.Errorf("rate limit = %+v, want 10/20", c.RateLimit)
 	}
-	if cfg.Backends["redis"].Addr != "localhost:6379" {
-		t.Errorf("redis addr = %q", cfg.Backends["redis"].Addr)
+	if cfg.Backends.Redis == nil || cfg.Backends.Redis.Addr != "localhost:6379" {
+		t.Errorf("redis addr = %+v", cfg.Backends.Redis)
+	}
+	if len(cfg.Backends.HTTPProxy) != 1 || cfg.Backends.HTTPProxy[0].Name != "victorialogs-a" {
+		t.Errorf("httpproxy = %+v, want one victorialogs-a", cfg.Backends.HTTPProxy)
 	}
 }
 
@@ -77,5 +95,48 @@ func TestLoadRejectsDuplicateTokens(t *testing.T) {
 	dup := `{"clients":[{"id":"a","token":"x"},{"id":"b","token":"x"}]}`
 	if _, err := Load(writeTemp(t, dup), nil); err == nil {
 		t.Error("expected error on duplicate tokens")
+	}
+}
+
+func TestLoadRejectsUndefinedClientGroup(t *testing.T) {
+	bad := `{"groups":["team-a"],"clients":[{"id":"a","token":"x","groups":["ghost"]}]}`
+	if _, err := Load(writeTemp(t, bad), nil); err == nil {
+		t.Error("expected error: client references a group not in groups[]")
+	}
+}
+
+func TestLoadRejectsUndefinedBackendGroup(t *testing.T) {
+	bad := `{
+	  "groups":["team-a"],
+	  "clients":[{"id":"a","token":"x","groups":["team-a"]}],
+	  "backends":{"httpproxy":[{"name":"vl","type":"victorialogs","base_url":"http://x","allowed_groups":["ghost"]}]}
+	}`
+	if _, err := Load(writeTemp(t, bad), nil); err == nil {
+		t.Error("expected error: backend allowed_groups references an undefined group")
+	}
+}
+
+func TestLoadRejectsUndefinedGrantGroup(t *testing.T) {
+	bad := `{
+	  "groups":["team-a"],
+	  "clients":[{"id":"a","token":"x","groups":["team-a"]}],
+	  "backends":{"httpproxy":[{"name":"vl","type":"victorialogs","base_url":"http://x","allowed_groups":["team-a"],"grants":[{"group":"ghost","endpoints":["vl.query"]}]}]}
+	}`
+	if _, err := Load(writeTemp(t, bad), nil); err == nil {
+		t.Error("expected error: grant references an undefined group")
+	}
+}
+
+func TestLoadRejectsDuplicateBackendInstanceName(t *testing.T) {
+	bad := `{
+	  "groups":["team-a"],
+	  "clients":[{"id":"a","token":"x","groups":["team-a"]}],
+	  "backends":{"httpproxy":[
+	    {"name":"vl","type":"victorialogs","base_url":"http://x","allowed_groups":["team-a"]},
+	    {"name":"vl","type":"victorialogs","base_url":"http://y","allowed_groups":["team-a"]}
+	  ]}
+	}`
+	if _, err := Load(writeTemp(t, bad), nil); err == nil {
+		t.Error("expected error: duplicate httpproxy instance name")
 	}
 }
