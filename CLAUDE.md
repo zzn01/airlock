@@ -7,7 +7,9 @@ is never reached directly.
 ## Build & test
 
 - `make ci` — runs `go vet`, `go test`, and `go build` over the whole module.
-  Keep it green at every commit. Module is pure stdlib (no external deps).
+  Keep it green at every commit. The core is stdlib; the only external
+  dependency is the MCP SDK (`github.com/modelcontextprotocol/go-sdk`), used by
+  `internal/mcpserver`.
 
 ## Request pipeline (`internal/gateway`)
 
@@ -59,7 +61,17 @@ deny=WARN) with client id, operation, decision, reason, and status.
   (`Build`) that wires config + backends into an `http.Handler`. `Handler()`
   (`health.go`) serves the unauthenticated `/healthz` (liveness) and `/readyz`
   (readiness) probes outside the auth pipeline, falling through to the gated
-  pipeline for everything else.
+  pipeline for everything else. `mcpaccess.go` exposes read-only seams
+  (`Config`, `Proxies`, `HasOperation`, `BearerToken`) the MCP front-end uses to
+  introspect identity/instances and re-dispatch tool calls through `ServeHTTP`.
+- `internal/mcpserver` — the MCP (Model Context Protocol) front-end: a
+  streamable-HTTP MCP server served alongside the gateway that maps the curated
+  operations to MCP tools. It is a protocol adapter only — it holds no
+  authorization/tenancy logic. It resolves the bearer token to a client with the
+  same mechanism the gateway uses, filters the tool list to the client's grants
+  (default-deny; each httpproxy tool's `instance` arg is an enum of reachable
+  instances), and re-dispatches every call through `gateway.Gateway.ServeHTTP`
+  so authz, scoping, rate limiting, and audit happen in the one existing place.
 - `internal/backend` — the `Operation`/`Backend` model and a route `Registry`.
 - `internal/backend/httpproxy` — read-only HTTP reverse-proxy backend type.
   Multiple named `Instance`s (via a `Manager`), each with its own `base_url`,
@@ -77,9 +89,11 @@ deny=WARN) with client id, operation, decision, reason, and status.
 
 ## Configuration
 
-JSON file; see `airlock.example.json`. Fields: `listen`, `groups[]` (named
-groups), `clients[]` (`id`, `token`, `groups[]`, `allow[]` of operation ids for
-Redis, `rate_limit{rps,burst}`), and `backends`:
+JSON file; see `airlock.example.json`. Fields: `listen`, optional
+`mcp{enable,listen,path}` (the MCP front-end; off unless `enable`, defaults
+`:8081` / `/mcp`), `groups[]` (named groups), `clients[]` (`id`, `token`,
+`groups[]`, `allow[]` of operation ids for Redis, `rate_limit{rps,burst}`), and
+`backends`:
 
 - `backends.redis.addr` — read-only Redis tool (optional).
 - `backends.httpproxy[]` — proxy instances, each: `name`, `type`
@@ -99,13 +113,16 @@ See the README for the scheme.
 
 ## Design
 
-`docs/design/2026-06-11-airlock.md` (MVP) and
+`docs/design/2026-06-11-airlock.md` (MVP),
 `docs/design/2026-06-11-airlock-group-access.md` (groups, httpproxy backends,
-strict per-instance routing, multi-tenant scoping).
+strict per-instance routing, multi-tenant scoping), and
+`docs/design/2026-06-11-airlock-mcp-server.md` (MCP front-end as a protocol
+adapter reusing the same security core).
 
 ## Scope
 
 Implemented: gateway pipeline, read-only Redis tool, group-based access control,
 multi-instance HTTP reverse-proxy backends (Prometheus/VictoriaLogs/Grafana
 read-only presets) with per-`(group,backend)` grants and server-side data
-scoping. Not yet: Postgres tool, web UI.
+scoping, and an MCP front-end exposing the curated operations as MCP tools over
+the same security core. Not yet: Postgres tool, web UI, gateway metrics.

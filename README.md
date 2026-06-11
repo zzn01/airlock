@@ -32,6 +32,41 @@ References are resolved at config load; an unset env var or unreadable file
 fails startup. For example, `airlock.example.json` sources the Grafana upstream
 token via `"Authorization": "env:GRAFANA_TOKEN"`.
 
+## MCP front-end
+
+airlock can additionally expose the curated operations as **MCP (Model Context
+Protocol) tools** for MCP-native AI clients, served over a streamable-HTTP
+transport alongside the HTTP gateway. Enable it with an `mcp` config section:
+
+```json
+"mcp": { "enable": true, "listen": ":8081", "path": "/mcp" }
+```
+
+- `enable` — turn the MCP front-end on (default off).
+- `listen` — its own listen address (default `:8081`).
+- `path` — the streamable-HTTP mount path (default `/mcp`).
+
+The MCP front-end is a protocol adapter only — it reuses the **same** security
+core as the HTTP gateway:
+
+- **Auth** — the MCP client presents `Authorization: Bearer <token>` on the
+  transport; it is resolved to a client with the same mechanism the gateway
+  uses. A missing/invalid token is a `401` (auth error) and exposes no tools.
+- **Tool filtering** — the tool list is filtered to what the client's groups are
+  actually granted (default-deny), and each httpproxy tool's `instance` argument
+  is constrained to the instances the client may reach, so the model only sees
+  tools it may call.
+- **Enforcement** — every tool call is re-dispatched through the gateway
+  pipeline, so the coarse group gate, endpoint allowlist, `(group, backend)`
+  grant check, per-client rate limit, server-side data scoping (VictoriaLogs
+  tenancy + mandatory LogsQL filter, forced/stripped params & headers), and the
+  structured audit record all apply exactly as on the HTTP path.
+
+Tools include `redis_get`/`redis_scan`/`redis_exists`/`redis_ttl`,
+`prometheus_query`/`prometheus_query_range`, `victorialogs_query`,
+`grafana_search`, and `grafana_ds_query`. See
+`docs/design/2026-06-11-airlock-mcp-server.md`.
+
 ## Deployment
 
 A multi-stage `Dockerfile` builds a static binary onto a minimal non-root

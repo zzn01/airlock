@@ -18,11 +18,18 @@ import (
 
 	"github.com/zzn01/airlock/internal/config"
 	"github.com/zzn01/airlock/internal/gateway"
+	"github.com/zzn01/airlock/internal/mcpserver"
 )
 
 // shutdownTimeout bounds how long the server waits for in-flight requests to
 // drain on SIGINT/SIGTERM before forcing the connections closed.
 const shutdownTimeout = 15 * time.Second
+
+// Defaults for the optional MCP front-end when enabled without explicit values.
+const (
+	defaultMCPListen = ":8081"
+	defaultMCPPath   = "/mcp"
+)
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -51,15 +58,25 @@ func main() {
 
 	srv := &http.Server{Addr: addr, Handler: g.Handler()}
 
+	// Optional MCP front-end, served alongside the gateway on its own address
+	// and path. It reuses the same gateway pipeline for every tool call.
+	mcpSrv := buildMCPServer(cfg, g, logger)
+
 	// Trap SIGINT/SIGTERM and shut down gracefully so in-flight requests drain.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	serveErr := make(chan error, 1)
+	serveErr := make(chan error, 2)
 	go func() {
 		logger.Info("airlock listening", "addr", addr)
 		serveErr <- srv.ListenAndServe()
 	}()
+	if mcpSrv != nil {
+		go func() {
+			logger.Info("airlock mcp listening", "addr", mcpSrv.Addr)
+			serveErr <- mcpSrv.ListenAndServe()
+		}()
+	}
 
 	select {
 	case err := <-serveErr:
@@ -74,10 +91,36 @@ func main() {
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
+		if mcpSrv != nil {
+			if err := mcpSrv.Shutdown(shutdownCtx); err != nil {
+				logger.Error("graceful shutdown failed (mcp)", "error", err)
+			}
+		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("graceful shutdown failed", "error", err)
 			os.Exit(1)
 		}
 		logger.Info("shutdown complete")
 	}
+}
+
+// buildMCPServer constructs the MCP front-end's http.Server if it is enabled in
+// the config, mounting the streamable MCP handler at the configured path.
+// Returns nil when the MCP front-end is disabled.
+func buildMCPServer(cfg *config.Config, g *gateway.Gateway, logger *slog.Logger) *http.Server {
+	if cfg.MCP == nil || !cfg.MCP.Enable {
+		return nil
+	}
+	addr := cfg.MCP.Listen
+	if addr == "" {
+		addr = defaultMCPListen
+	}
+	mountPath := cfg.MCP.Path
+	if mountPath == "" {
+		mountPath = defaultMCPPath
+	}
+	mux := http.NewServeMux()
+	mux.Handle(mountPath, mcpserver.New(g, logger).Handler())
+	logger.Info("airlock mcp front-end enabled", "addr", addr, "path", mountPath)
+	return &http.Server{Addr: addr, Handler: mux}
 }

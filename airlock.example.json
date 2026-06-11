@@ -1,5 +1,6 @@
 {
   "listen": ":8080",
+  "mcp": { "enable": true, "listen": ":8081", "path": "/mcp" },
   "groups": ["team-checkout", "team-payments", "sre"],
   "clients": [
     {
