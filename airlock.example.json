@@ -1,6 +1,17 @@
 {
   "listen": ":8080",
   "mcp": { "enable": true, "listen": ":8081", "path": "/mcp" },
+  "web": {
+    "enable": true,
+    "listen": ":8082",
+    "users_file": "/var/lib/airlock/users.json",
+    "token_ttl": "12h",
+    "bootstrap": {
+      "username": "admin",
+      "password": "env:AIRLOCK_ADMIN_PASSWORD",
+      "groups": ["sre"]
+    }
+  },
   "groups": ["team-checkout", "team-payments", "sre"],
   "clients": [
     {

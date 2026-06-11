@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/zzn01/airlock/internal/backend/httpproxy"
 )
@@ -20,6 +21,28 @@ type Config struct {
 	Clients  []Client   `json:"clients"`
 	Backends Backends   `json:"backends"`
 	MCP      *MCPServer `json:"mcp"`
+	Web      *WebAuth   `json:"web"`
+}
+
+// WebAuth configures the optional local-account web login front-end. It runs
+// alongside the HTTP gateway on its own listen address and issues short-lived
+// bearer tokens that resolve to a user's groups through the same access-control
+// core static config clients use. When nil or disabled, no web login is served.
+type WebAuth struct {
+	Enable    bool           `json:"enable"`
+	Listen    string         `json:"listen"`     // default ":8082" (applied by the caller)
+	UsersFile string         `json:"users_file"` // path to the persisted local user store
+	TokenTTL  string         `json:"token_ttl"`  // session lifetime as a Go duration, e.g. "12h"; default 12h
+	Bootstrap *BootstrapUser `json:"bootstrap"`  // optional initial user created at startup if absent
+}
+
+// BootstrapUser is an initial local account created at startup when the user
+// store does not already contain it, so a fresh deployment has a way in without
+// hardcoded credentials. The password is a secret reference (env:/file:/plain).
+type BootstrapUser struct {
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	Groups   []string `json:"groups"`
 }
 
 // MCPServer configures the optional MCP (Model Context Protocol) front-end. It
@@ -160,6 +183,31 @@ func (c *Config) Validate() error {
 
 	if c.MCP != nil && c.MCP.Enable && c.MCP.Path != "" && !strings.HasPrefix(c.MCP.Path, "/") {
 		return fmt.Errorf("mcp path %q must begin with %q", c.MCP.Path, "/")
+	}
+
+	if c.Web != nil && c.Web.Enable {
+		if c.Web.UsersFile == "" {
+			return fmt.Errorf("web: users_file is required when web login is enabled")
+		}
+		if c.Web.TokenTTL != "" {
+			d, err := time.ParseDuration(c.Web.TokenTTL)
+			if err != nil {
+				return fmt.Errorf("web: token_ttl %q: %w", c.Web.TokenTTL, err)
+			}
+			if d <= 0 {
+				return fmt.Errorf("web: token_ttl %q must be positive", c.Web.TokenTTL)
+			}
+		}
+		if b := c.Web.Bootstrap; b != nil {
+			if b.Username == "" {
+				return fmt.Errorf("web: bootstrap user has an empty username")
+			}
+			for _, g := range b.Groups {
+				if !defined[g] {
+					return fmt.Errorf("web: bootstrap user %q references undefined group %q", b.Username, g)
+				}
+			}
+		}
 	}
 	return nil
 }

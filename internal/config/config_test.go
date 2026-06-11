@@ -51,6 +51,64 @@ func TestLoadParsesMCPSection(t *testing.T) {
 	}
 }
 
+func TestLoadParsesWebSection(t *testing.T) {
+	t.Setenv("ADMIN_PW", "s3cr3t")
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "listen": ":9100", "users_file": "/tmp/users.json", "token_ttl": "2h",
+	          "bootstrap": {"username": "admin", "password": "env:ADMIN_PW", "groups": ["team-a"]}}
+	}`
+	cfg, err := Load(writeTemp(t, body), nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Web == nil || !cfg.Web.Enable || cfg.Web.Listen != ":9100" || cfg.Web.UsersFile != "/tmp/users.json" || cfg.Web.TokenTTL != "2h" {
+		t.Fatalf("web = %+v, want enabled :9100", cfg.Web)
+	}
+	if cfg.Web.Bootstrap == nil || cfg.Web.Bootstrap.Password != "s3cr3t" {
+		t.Errorf("bootstrap password = %+v, want resolved secret", cfg.Web.Bootstrap)
+	}
+}
+
+func TestLoadRejectsWebWithoutUsersFile(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err == nil {
+		t.Fatal("expected error for web login without users_file, got nil")
+	}
+}
+
+func TestLoadRejectsWebBadTokenTTL(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "users_file": "/tmp/u.json", "token_ttl": "nope"}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err == nil {
+		t.Fatal("expected error for invalid token_ttl, got nil")
+	}
+}
+
+func TestLoadRejectsWebBootstrapUndefinedGroup(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "users_file": "/tmp/u.json",
+	          "bootstrap": {"username": "admin", "password": "x", "groups": ["ghost"]}}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err == nil {
+		t.Fatal("expected error for bootstrap referencing undefined group, got nil")
+	}
+}
+
 func TestLoadRejectsMCPPathWithoutLeadingSlash(t *testing.T) {
 	body := `{
 	  "groups": ["team-a"],
