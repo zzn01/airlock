@@ -1,0 +1,56 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>airlock — {{.Title}}</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+  input[type=text], input[type=password], textarea { width: 100%; padding: 0.5rem; font-size: 1rem; box-sizing: border-box; }
+  button { margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+  .error { color: #b00020; margin: 0.5rem 0; }
+  .token { width: 100%; font-family: monospace; padding: 0.5rem; box-sizing: border-box; }
+  .muted { color: #555; font-size: 0.9rem; }
+  code { background: #f2f2f2; padding: 0.1rem 0.3rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+{{end}}
+
+{{define "foot"}}
+</body>
+</html>
+{{end}}
+
+{{define "login"}}{{template "head" .}}
+<h1>airlock login</h1>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="login">
+  <label for="username">Username</label>
+  <input type="text" id="username" name="username" autocomplete="username" autofocus>
+  <label for="password">Password</label>
+  <input type="password" id="password" name="password" autocomplete="current-password">
+  <button type="submit">Log in</button>
+</form>
+{{template "foot" .}}{{end}}
+
+{{define "token"}}{{template "head" .}}
+<h1>Your airlock token</h1>
+<p class="muted">Use this as the bearer credential against the gateway and MCP server. It expires {{.Expires}}.</p>
+<textarea class="token" id="token" rows="3" readonly>{{.Token}}</textarea>
+<button type="button" onclick="navigator.clipboard.writeText(document.getElementById('token').value)">Copy</button>
+<p class="muted">Send it as <code>Authorization: Bearer &lt;token&gt;</code> or <code>X-API-Key: &lt;token&gt;</code>.</p>
+<form method="post" action="logout">
+  <button type="submit">Log out (revoke this token)</button>
+</form>
+{{template "foot" .}}{{end}}
+
+{{define "loggedout"}}{{template "head" .}}
+<h1>Logged out</h1>
+<p class="muted">Your token has been revoked.</p>
+<form method="get" action="login">
+  <button type="submit">Log in again</button>
+</form>
+{{template "foot" .}}{{end}}

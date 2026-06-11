@@ -21,12 +21,13 @@ const proxyPrefix = "/b/"
 
 // Gateway is the single authenticating entry point for the LLM side.
 type Gateway struct {
-	cfg     *config.Config
-	reg     *backend.Registry
-	proxies *httpproxy.Manager
-	limiter *ratelimit.Limiter
-	logger  *slog.Logger
-	ready   atomic.Bool // readiness reported by /readyz; see Handler.
+	cfg      *config.Config
+	reg      *backend.Registry
+	proxies  *httpproxy.Manager
+	limiter  *ratelimit.Limiter
+	logger   *slog.Logger
+	resolver TokenResolver // optional dynamic token resolver (e.g. web-login sessions)
+	ready    atomic.Bool   // readiness reported by /readyz; see Handler.
 }
 
 // New constructs a Gateway. None of the arguments may be nil except logger,
@@ -67,7 +68,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// [1] Authenticate.
 	token := bearerToken(r)
-	client, ok := g.cfg.ClientByToken(token)
+	client, ok := g.ResolveClient(token)
 	if !ok {
 		reason := "invalid_credential"
 		if token == "" {

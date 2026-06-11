@@ -49,7 +49,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := gateway.BearerToken(r)
-		if _, ok := s.g.Config().ClientByToken(token); !ok {
+		if _, ok := s.g.ResolveClient(token); !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="airlock"`)
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
@@ -69,7 +69,7 @@ func (s *Server) getServer(r *http.Request) *mcp.Server {
 // owning token may call. An empty/unknown token yields a no-tool server.
 func (s *Server) serverForToken(token string) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	client, ok := s.g.Config().ClientByToken(token)
+	client, ok := s.g.ResolveClient(token)
 	if !ok {
 		return srv
 	}

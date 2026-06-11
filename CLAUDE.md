@@ -7,9 +7,10 @@ is never reached directly.
 ## Build & test
 
 - `make ci` — runs `go vet`, `go test`, and `go build` over the whole module.
-  Keep it green at every commit. The core is stdlib; the only external
-  dependency is the MCP SDK (`github.com/modelcontextprotocol/go-sdk`), used by
-  `internal/mcpserver`.
+  Keep it green at every commit. The core is stdlib; external dependencies are
+  the MCP SDK (`github.com/modelcontextprotocol/go-sdk`, used by
+  `internal/mcpserver`) and `golang.org/x/crypto/bcrypt` (password hashing in
+  `internal/webauth`).
 
 ## Request pipeline (`internal/gateway`)
 
@@ -18,7 +19,9 @@ After authentication, requests split into two pipelines by path. The legacy
 instances, `/b/<instance>/...`).
 
 Authenticate first (both): `Authorization: Bearer <token>` or
-`X-API-Key: <token>` maps to a configured client. Missing/invalid => `401`.
+`X-API-Key: <token>` resolves to a client identity via `Gateway.ResolveClient`
+— static config clients first, then any dynamic `TokenResolver` (the web-login
+session store). Missing/invalid/expired/revoked => `401`.
 
 Op pipeline (`/redis/*`):
 
@@ -51,7 +54,8 @@ deny=WARN) with client id, operation, decision, reason, and status.
 ## Packages
 
 - `cmd/airlock` — entry point; loads config, serves the gateway via
-  `Gateway.Handler()`, and shuts down gracefully (drains in-flight requests
+  `Gateway.Handler()`, optionally serves the MCP and web-login front-ends on
+  their own listeners, and shuts down gracefully (drains in-flight requests
   within a bounded timeout) on SIGINT/SIGTERM.
 - `internal/config` — JSON config model + loader. `AIRLOCK_CONFIG` selects the
   file (default `airlock.json`); `AIRLOCK_LISTEN` overrides the listen address.
@@ -64,6 +68,17 @@ deny=WARN) with client id, operation, decision, reason, and status.
   pipeline for everything else. `mcpaccess.go` exposes read-only seams
   (`Config`, `Proxies`, `HasOperation`, `BearerToken`) the MCP front-end uses to
   introspect identity/instances and re-dispatch tool calls through `ServeHTTP`.
+  `resolver.go` defines the `TokenResolver` seam and `ResolveClient`
+  (config clients first, then any registered dynamic resolver); both the HTTP
+  pipeline and the MCP front-end resolve identity through it.
+- `internal/webauth` — the optional local-account web-login front-end (Phase 2,
+  first slice). A persisted `UserStore` (username + bcrypt hash + groups, atomic
+  `0600` JSON file) authenticates a user; a `SessionStore` (in-memory,
+  injectable clock) issues an opaque bearer token bound to the user's
+  identity+groups+expiry and satisfies `gateway.TokenResolver` so the token
+  resolves through the existing access-control core. `server.go` serves the
+  minimal server-rendered login/token/logout pages (embedded `html/template`)
+  on its own listener. Identity + token issuance only — no authorization logic.
 - `internal/mcpserver` — the MCP (Model Context Protocol) front-end: a
   streamable-HTTP MCP server served alongside the gateway that maps the curated
   operations to MCP tools. It is a protocol adapter only — it holds no
@@ -91,7 +106,11 @@ deny=WARN) with client id, operation, decision, reason, and status.
 
 JSON file; see `airlock.example.json`. Fields: `listen`, optional
 `mcp{enable,listen,path}` (the MCP front-end; off unless `enable`, defaults
-`:8081` / `/mcp`), `groups[]` (named groups), `clients[]` (`id`, `token`,
+`:8081` / `/mcp`), optional `web{enable,listen,users_file,token_ttl,bootstrap}`
+(the local-account web login; off unless `enable`, default listen `:8082`,
+`token_ttl` default `12h`; `bootstrap{username,password,groups}` creates an
+initial user at startup if absent, `password` being a secret reference),
+`groups[]` (named groups), `clients[]` (`id`, `token`,
 `groups[]`, `allow[]` of operation ids for Redis, `rate_limit{rps,burst}`), and
 `backends`:
 
@@ -107,9 +126,9 @@ JSON file; see `airlock.example.json`. Fields: `listen`, optional
 
 At least one backend (redis or httpproxy) must be configured.
 
-Secret-bearing values (client `token`s, `upstream_auth` values) may be given as
-`env:NAME` or `file:/path` references, resolved at load (plaintext still works).
-See the README for the scheme.
+Secret-bearing values (client `token`s, `upstream_auth` values, the web
+`bootstrap.password`) may be given as `env:NAME` or `file:/path` references,
+resolved at load (plaintext still works). See the README for the scheme.
 
 ## Design
 
@@ -117,12 +136,17 @@ See the README for the scheme.
 `docs/design/2026-06-11-airlock-group-access.md` (groups, httpproxy backends,
 strict per-instance routing, multi-tenant scoping), and
 `docs/design/2026-06-11-airlock-mcp-server.md` (MCP front-end as a protocol
-adapter reusing the same security core).
+adapter reusing the same security core), and
+`docs/design/2026-06-11-airlock-web-auth.md` (local-account web login + opaque
+token issuance feeding the existing identity/groups resolution).
 
 ## Scope
 
 Implemented: gateway pipeline, read-only Redis tool, group-based access control,
 multi-instance HTTP reverse-proxy backends (Prometheus/VictoriaLogs/Grafana
 read-only presets) with per-`(group,backend)` grants and server-side data
-scoping, and an MCP front-end exposing the curated operations as MCP tools over
-the same security core. Not yet: Postgres tool, web UI, gateway metrics.
+scoping, an MCP front-end exposing the curated operations as MCP tools over the
+same security core, and a local-account web login that issues short-lived
+bearer tokens resolving to a user's groups through that same core. Not yet:
+OIDC/SSO login + claim→group mapping, an admin console (user/group/grant CRUD),
+Postgres tool, gateway metrics.

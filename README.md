@@ -67,6 +67,41 @@ Tools include `redis_get`/`redis_scan`/`redis_exists`/`redis_ttl`,
 `grafana_search`, and `grafana_ds_query`. See
 `docs/design/2026-06-11-airlock-mcp-server.md`.
 
+## Web login (local accounts)
+
+airlock can serve a minimal **web login** so human users obtain a token without
+a static config entry. Enable it with a `web` config section:
+
+```json
+"web": {
+  "enable": true,
+  "listen": ":8082",
+  "users_file": "/var/lib/airlock/users.json",
+  "token_ttl": "12h",
+  "bootstrap": { "username": "admin", "password": "env:AIRLOCK_ADMIN_PASSWORD", "groups": ["sre"] }
+}
+```
+
+- `enable` — turn the web login on (default off).
+- `listen` — its own listen address (default `:8082`), separate from the gateway
+  and MCP server and from the health probes.
+- `users_file` — JSON file of local accounts (username, bcrypt hash, groups),
+  persisted with `0600` perms; its parent directory must exist.
+- `token_ttl` — issued-token lifetime as a Go duration (default `12h`).
+- `bootstrap` — optional initial account created at startup if absent; its
+  `password` is a secret reference (`env:`/`file:`/plain), so no credential is
+  hardcoded.
+
+A user logs in at `GET /login`, and on success is shown a short-lived **opaque
+bearer token** to paste into a gateway or MCP client (`Authorization: Bearer
+<token>` or `X-API-Key: <token>`). The token is bound server-side to the user's
+groups and resolves through the **same** access-control core as a static config
+client — groups → backend `allowed_groups` → `(group, backend)` grants → data
+scope. Static config tokens keep working unchanged and take precedence on any
+overlap. `POST /logout` revokes the current token immediately; a process restart
+revokes all issued tokens (the user store persists, sessions do not). See
+`docs/design/2026-06-11-airlock-web-auth.md`.
+
 ## Deployment
 
 A multi-stage `Dockerfile` builds a static binary onto a minimal non-root
