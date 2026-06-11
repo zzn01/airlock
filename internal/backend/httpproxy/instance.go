@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,9 @@ func New(cfg Config) (*Instance, error) {
 
 // Name returns the instance name.
 func (in *Instance) Name() string { return in.cfg.Name }
+
+// Type returns the instance's service type (prometheus|victorialogs|grafana).
+func (in *Instance) Type() string { return in.cfg.Type }
 
 // AllowedGroups returns the coarse-gate group list.
 func (in *Instance) AllowedGroups() []string { return in.cfg.AllowedGroups }
@@ -288,4 +292,15 @@ func (m *Manager) Add(in *Instance) error {
 func (m *Manager) Instance(name string) (*Instance, bool) {
 	in, ok := m.instances[name]
 	return in, ok
+}
+
+// Instances returns all registered instances, sorted by name for deterministic
+// iteration (e.g. when building the MCP tool list).
+func (m *Manager) Instances() []*Instance {
+	out := make([]*Instance, 0, len(m.instances))
+	for _, in := range m.instances {
+		out = append(out, in)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
 }
