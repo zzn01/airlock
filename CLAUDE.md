@@ -87,6 +87,13 @@ deny=WARN) with client id, operation, decision, reason, and status.
   (default-deny; each httpproxy tool's `instance` arg is an enum of reachable
   instances), and re-dispatches every call through `gateway.Gateway.ServeHTTP`
   so authz, scoping, rate limiting, and audit happen in the one existing place.
+  **Each MCP session is bound to the client that authenticated its
+  `initialize`**: auth goes through the SDK's `auth.RequireBearerToken`, which
+  stamps a stable per-client user id (`sessionUserID`) into the request context,
+  and the streamable transport rejects (`403`) any later request that presents a
+  session's `Mcp-Session-Id` while authenticated as a different client — so a
+  client cannot ride another's session with the creator's identity/grants/token/
+  tenancy. Static config clients and web-issued tokens bind identically.
 - `internal/backend` — the `Operation`/`Backend` model and a route `Registry`.
 - `internal/backend/httpproxy` — read-only HTTP reverse-proxy backend type.
   Multiple named `Instance`s (via a `Manager`), each with its own `base_url`,
