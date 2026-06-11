@@ -10,7 +10,9 @@ import (
 )
 
 func TestExampleConfigLoadsAndBuilds(t *testing.T) {
-	cfg, err := config.Load("../../airlock.example.json", map[string]string{})
+	// The example config sources the Grafana upstream token via env:GRAFANA_TOKEN,
+	// so the secret reference must resolve for the load to succeed.
+	cfg, err := config.Load("../../airlock.example.json", map[string]string{"GRAFANA_TOKEN": "Bearer test-token"})
 	if err != nil {
 		t.Fatalf("load example config: %v", err)
 	}

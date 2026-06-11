@@ -84,6 +84,12 @@ func Load(path string, env map[string]string) (*Config, error) {
 		cfg.Listen = v
 	}
 
+	// Resolve env:/file: secret references before validation so that
+	// uniqueness and non-empty checks see the effective plaintext values.
+	if err := cfg.resolveSecrets(get); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

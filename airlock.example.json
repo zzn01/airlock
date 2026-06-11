@@ -76,7 +76,7 @@
         "allowed_groups": ["sre"],
         "max_response_bytes": 2097152,
         "upstream_auth": {
-          "Authorization": "Bearer replace-with-grafana-readonly-service-account-token"
+          "Authorization": "env:GRAFANA_TOKEN"
         },
         "grants": [
           {
