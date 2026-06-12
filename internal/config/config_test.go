@@ -109,6 +109,110 @@ func TestLoadRejectsWebBootstrapUndefinedGroup(t *testing.T) {
 	}
 }
 
+func TestLoadParsesOIDCSection(t *testing.T) {
+	t.Setenv("OIDC_SECRET", "client-secret-value")
+	body := `{
+	  "groups": ["team-a", "sre"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "users_file": "/tmp/u.json", "oidc": {
+	    "enable": true,
+	    "issuer": "https://idp.example.com",
+	    "client_id": "airlock",
+	    "client_secret": "env:OIDC_SECRET",
+	    "redirect_url": "https://airlock.example.com/oidc/callback",
+	    "scopes": ["openid", "groups"],
+	    "groups_claim": "roles",
+	    "group_mapping": {"platform-oncall": ["sre"], "checkout": ["team-a"]},
+	    "overrides": [{"email": "lead@example.com", "groups": ["sre", "team-a"]}]
+	  }}
+	}`
+	cfg, err := Load(writeTemp(t, body), nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	o := cfg.Web.OIDC
+	if o == nil || !o.Enable {
+		t.Fatalf("oidc = %+v, want enabled", o)
+	}
+	if o.ClientSecret != "client-secret-value" {
+		t.Errorf("client_secret = %q, want resolved secret", o.ClientSecret)
+	}
+	if o.Issuer != "https://idp.example.com" || o.ClientID != "airlock" || o.GroupsClaim != "roles" {
+		t.Errorf("oidc fields = %+v", o)
+	}
+	if len(o.GroupMapping["platform-oncall"]) != 1 || o.GroupMapping["platform-oncall"][0] != "sre" {
+		t.Errorf("group_mapping = %+v", o.GroupMapping)
+	}
+	if len(o.Overrides) != 1 || o.Overrides[0].Email != "lead@example.com" {
+		t.Errorf("overrides = %+v", o.Overrides)
+	}
+}
+
+func TestLoadRejectsOIDCMissingRequiredFields(t *testing.T) {
+	// Each case omits exactly one required field while OIDC is enabled.
+	for name, oidc := range map[string]string{
+		"issuer":        `{"enable": true, "client_id": "a", "client_secret": "s", "redirect_url": "https://x/cb"}`,
+		"client_id":     `{"enable": true, "issuer": "https://i", "client_secret": "s", "redirect_url": "https://x/cb"}`,
+		"client_secret": `{"enable": true, "issuer": "https://i", "client_id": "a", "redirect_url": "https://x/cb"}`,
+		"redirect_url":  `{"enable": true, "issuer": "https://i", "client_id": "a", "client_secret": "s"}`,
+	} {
+		body := `{
+		  "groups": ["team-a"],
+		  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+		  "backends": {"redis": {"addr": "localhost:6379"}},
+		  "web": {"enable": true, "users_file": "/tmp/u.json", "oidc": ` + oidc + `}
+		}`
+		if _, err := Load(writeTemp(t, body), nil); err == nil {
+			t.Errorf("missing %s: expected error, got nil", name)
+		}
+	}
+}
+
+func TestLoadRejectsOIDCMappingUndefinedGroup(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "users_file": "/tmp/u.json", "oidc": {
+	    "enable": true, "issuer": "https://i", "client_id": "a", "client_secret": "s",
+	    "redirect_url": "https://x/cb", "group_mapping": {"x": ["ghost"]}
+	  }}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err == nil {
+		t.Fatal("expected error for group_mapping referencing undefined group, got nil")
+	}
+}
+
+func TestLoadRejectsOIDCOverrideUndefinedGroup(t *testing.T) {
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "users_file": "/tmp/u.json", "oidc": {
+	    "enable": true, "issuer": "https://i", "client_id": "a", "client_secret": "s",
+	    "redirect_url": "https://x/cb", "overrides": [{"subject": "abc", "groups": ["ghost"]}]
+	  }}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err == nil {
+		t.Fatal("expected error for override referencing undefined group, got nil")
+	}
+}
+
+func TestLoadDisabledOIDCSkipsValidation(t *testing.T) {
+	// A disabled OIDC block with missing required fields must not fail load:
+	// misconfigured-but-disabled OIDC never blocks startup or local login.
+	body := `{
+	  "groups": ["team-a"],
+	  "clients": [{"id": "llm-1", "token": "tok-abc", "groups": ["team-a"]}],
+	  "backends": {"redis": {"addr": "localhost:6379"}},
+	  "web": {"enable": true, "users_file": "/tmp/u.json", "oidc": {"enable": false}}
+	}`
+	if _, err := Load(writeTemp(t, body), nil); err != nil {
+		t.Fatalf("disabled OIDC should load: %v", err)
+	}
+}
+
 func TestLoadRejectsMCPPathWithoutLeadingSlash(t *testing.T) {
 	body := `{
 	  "groups": ["team-a"],

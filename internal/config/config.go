@@ -34,6 +34,36 @@ type WebAuth struct {
 	UsersFile string         `json:"users_file"` // path to the persisted local user store
 	TokenTTL  string         `json:"token_ttl"`  // session lifetime as a Go duration, e.g. "12h"; default 12h
 	Bootstrap *BootstrapUser `json:"bootstrap"`  // optional initial user created at startup if absent
+	OIDC      *OIDC          `json:"oidc"`       // optional OIDC/SSO login, served alongside local accounts
+}
+
+// OIDC configures the optional OIDC/SSO login, a second identity source served
+// alongside local accounts within the web front-end. When nil or disabled, only
+// local login is offered; a disabled or unreachable provider never breaks local
+// login. Group membership is derived from a configurable ID-token claim (and an
+// optional admin override) and then drives the same access-control core as every
+// other identity. ClientSecret is a secret reference (env:/file:/plain).
+type OIDC struct {
+	Enable       bool                `json:"enable"`
+	Issuer       string              `json:"issuer"`        // OIDC issuer URL (discovery base)
+	ClientID     string              `json:"client_id"`     // OAuth2 client id
+	ClientSecret string              `json:"client_secret"` // OAuth2 client secret (secret reference)
+	RedirectURL  string              `json:"redirect_url"`  // this server's /oidc/callback URL
+	Scopes       []string            `json:"scopes"`        // default ["openid","profile","email"]
+	GroupsClaim  string              `json:"groups_claim"`  // ID-token claim holding group values; default "groups"
+	GroupMapping map[string][]string `json:"group_mapping"` // IdP claim value -> airlock group names
+	Overrides    []OIDCOverride      `json:"overrides"`     // admin manual per-user group overrides (override-first)
+}
+
+// OIDCOverride pins a specific authenticated user to a fixed set of airlock
+// groups, taking precedence over the claim-derived groups. A user matches when
+// the override's Subject equals the OIDC `sub` claim or its Email equals the
+// `email` claim. It is the operator's escape hatch independent of the IdP's
+// asserted groups.
+type OIDCOverride struct {
+	Subject string   `json:"subject"`
+	Email   string   `json:"email"`
+	Groups  []string `json:"groups"`
 }
 
 // BootstrapUser is an initial local account created at startup when the user
@@ -206,6 +236,45 @@ func (c *Config) Validate() error {
 				if !defined[g] {
 					return fmt.Errorf("web: bootstrap user %q references undefined group %q", b.Username, g)
 				}
+			}
+		}
+		if o := c.Web.OIDC; o != nil && o.Enable {
+			if err := o.validate(defined); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validate checks an enabled OIDC block: the required provider fields are
+// present and every group produced by the claim mapping or an override is a
+// defined group (a typo fails fast rather than silently granting nothing).
+func (o *OIDC) validate(defined map[string]bool) error {
+	for field, val := range map[string]string{
+		"issuer":        o.Issuer,
+		"client_id":     o.ClientID,
+		"client_secret": o.ClientSecret,
+		"redirect_url":  o.RedirectURL,
+	} {
+		if val == "" {
+			return fmt.Errorf("web.oidc: %s is required when OIDC is enabled", field)
+		}
+	}
+	for claim, groups := range o.GroupMapping {
+		for _, g := range groups {
+			if !defined[g] {
+				return fmt.Errorf("web.oidc: group_mapping for %q references undefined group %q", claim, g)
+			}
+		}
+	}
+	for i, ov := range o.Overrides {
+		if ov.Subject == "" && ov.Email == "" {
+			return fmt.Errorf("web.oidc: overrides[%d] must set subject or email", i)
+		}
+		for _, g := range ov.Groups {
+			if !defined[g] {
+				return fmt.Errorf("web.oidc: override %d references undefined group %q", i, g)
 			}
 		}
 	}

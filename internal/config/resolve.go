@@ -50,8 +50,8 @@ func resolveSecret(ref string, getenv func(string) string) (string, error) {
 }
 
 // resolveSecrets resolves every secret-bearing field in the config in place:
-// client tokens, each httpproxy instance's upstream_auth header values, and the
-// optional web bootstrap user's password.
+// client tokens, each httpproxy instance's upstream_auth header values, the
+// optional web bootstrap user's password, and the optional OIDC client secret.
 func (c *Config) resolveSecrets(getenv func(string) string) error {
 	for i := range c.Clients {
 		v, err := resolveSecret(c.Clients[i].Token, getenv)
@@ -76,6 +76,13 @@ func (c *Config) resolveSecrets(getenv func(string) string) error {
 			return fmt.Errorf("web bootstrap user %q password: %w", c.Web.Bootstrap.Username, err)
 		}
 		c.Web.Bootstrap.Password = v
+	}
+	if c.Web != nil && c.Web.OIDC != nil && c.Web.OIDC.ClientSecret != "" {
+		v, err := resolveSecret(c.Web.OIDC.ClientSecret, getenv)
+		if err != nil {
+			return fmt.Errorf("web oidc client_secret: %w", err)
+		}
+		c.Web.OIDC.ClientSecret = v
 	}
 	return nil
 }
