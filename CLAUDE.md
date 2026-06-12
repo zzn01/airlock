@@ -9,8 +9,9 @@ is never reached directly.
 - `make ci` — runs `go vet`, `go test`, and `go build` over the whole module.
   Keep it green at every commit. The core is stdlib; external dependencies are
   the MCP SDK (`github.com/modelcontextprotocol/go-sdk`, used by
-  `internal/mcpserver`) and `golang.org/x/crypto/bcrypt` (password hashing in
-  `internal/webauth`).
+  `internal/mcpserver`), `golang.org/x/crypto/bcrypt` (password hashing in
+  `internal/webauth`), and `github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2`
+  (OIDC/SSO login in `internal/webauth`).
 
 ## Request pipeline (`internal/gateway`)
 
@@ -71,14 +72,20 @@ deny=WARN) with client id, operation, decision, reason, and status.
   `resolver.go` defines the `TokenResolver` seam and `ResolveClient`
   (config clients first, then any registered dynamic resolver); both the HTTP
   pipeline and the MCP front-end resolve identity through it.
-- `internal/webauth` — the optional local-account web-login front-end (Phase 2,
-  first slice). A persisted `UserStore` (username + bcrypt hash + groups, atomic
-  `0600` JSON file) authenticates a user; a `SessionStore` (in-memory,
-  injectable clock) issues an opaque bearer token bound to the user's
-  identity+groups+expiry and satisfies `gateway.TokenResolver` so the token
-  resolves through the existing access-control core. `server.go` serves the
-  minimal server-rendered login/token/logout pages (embedded `html/template`)
-  on its own listener. Identity + token issuance only — no authorization logic.
+- `internal/webauth` — the optional web-login front-end (Phase 2). A persisted
+  `UserStore` (username + bcrypt hash + groups, atomic `0600` JSON file)
+  authenticates a local user; a `SessionStore` (in-memory, injectable clock)
+  issues an opaque bearer token bound to the user's identity+groups+expiry and
+  satisfies `gateway.TokenResolver` so the token resolves through the existing
+  access-control core. `server.go` serves the minimal server-rendered
+  login/token/logout pages (embedded `html/template`) on its own listener.
+  `oidc.go` adds **OIDC/SSO login** (slice 2b) as a second identity source: the
+  `Authenticator` seam (real `OIDCProvider` over go-oidc + oauth2; faked in
+  tests) runs the authorization-code flow with `state`/`nonce` CSRF protection,
+  and the pure `DeriveGroups` maps a configurable ID-token claim to airlock
+  groups (admin per-user override first, else the config `group_mapping`).
+  Both paths converge on `SessionStore.Issue`, so OIDC yields the same token
+  model. Identity + token issuance only — no authorization logic.
 - `internal/mcpserver` — the MCP (Model Context Protocol) front-end: a
   streamable-HTTP MCP server served alongside the gateway that maps the curated
   operations to MCP tools. It is a protocol adapter only — it holds no
@@ -113,10 +120,14 @@ deny=WARN) with client id, operation, decision, reason, and status.
 
 JSON file; see `airlock.example.json`. Fields: `listen`, optional
 `mcp{enable,listen,path}` (the MCP front-end; off unless `enable`, defaults
-`:8081` / `/mcp`), optional `web{enable,listen,users_file,token_ttl,bootstrap}`
-(the local-account web login; off unless `enable`, default listen `:8082`,
+`:8081` / `/mcp`), optional `web{enable,listen,users_file,token_ttl,bootstrap,oidc}`
+(the web login; off unless `enable`, default listen `:8082`,
 `token_ttl` default `12h`; `bootstrap{username,password,groups}` creates an
-initial user at startup if absent, `password` being a secret reference),
+initial local user at startup if absent, `password` being a secret reference;
+`oidc{enable,issuer,client_id,client_secret,redirect_url,scopes,groups_claim,
+group_mapping,overrides}` adds OIDC/SSO login — claim→group mapping with admin
+per-user overrides, `client_secret` a secret reference; a disabled or
+unreachable provider never breaks local login),
 `groups[]` (named groups), `clients[]` (`id`, `token`,
 `groups[]`, `allow[]` of operation ids for Redis, `rate_limit{rps,burst}`), and
 `backends`:
@@ -134,8 +145,9 @@ initial user at startup if absent, `password` being a secret reference),
 At least one backend (redis or httpproxy) must be configured.
 
 Secret-bearing values (client `token`s, `upstream_auth` values, the web
-`bootstrap.password`) may be given as `env:NAME` or `file:/path` references,
-resolved at load (plaintext still works). See the README for the scheme.
+`bootstrap.password`, the web `oidc.client_secret`) may be given as `env:NAME`
+or `file:/path` references, resolved at load (plaintext still works). See the
+README for the scheme.
 
 ## Design
 
@@ -145,7 +157,9 @@ strict per-instance routing, multi-tenant scoping), and
 `docs/design/2026-06-11-airlock-mcp-server.md` (MCP front-end as a protocol
 adapter reusing the same security core), and
 `docs/design/2026-06-11-airlock-web-auth.md` (local-account web login + opaque
-token issuance feeding the existing identity/groups resolution).
+token issuance feeding the existing identity/groups resolution), and
+`docs/design/2026-06-12-airlock-oidc-login.md` (OIDC/SSO login as a second
+identity source with configurable claim→group mapping and admin overrides).
 
 ## Scope
 
@@ -153,7 +167,8 @@ Implemented: gateway pipeline, read-only Redis tool, group-based access control,
 multi-instance HTTP reverse-proxy backends (Prometheus/VictoriaLogs/Grafana
 read-only presets) with per-`(group,backend)` grants and server-side data
 scoping, an MCP front-end exposing the curated operations as MCP tools over the
-same security core, and a local-account web login that issues short-lived
-bearer tokens resolving to a user's groups through that same core. Not yet:
-OIDC/SSO login + claim→group mapping, an admin console (user/group/grant CRUD),
-Postgres tool, gateway metrics.
+same security core, a local-account web login that issues short-lived bearer
+tokens resolving to a user's groups through that same core, and OIDC/SSO login
+(authorization-code flow) deriving those groups from a configurable ID-token
+claim with admin per-user overrides. Not yet: an admin console (user/group/grant
+CRUD), Postgres tool, gateway metrics.

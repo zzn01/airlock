@@ -34,6 +34,12 @@
   <input type="password" id="password" name="password" autocomplete="current-password">
   <button type="submit">Log in</button>
 </form>
+{{if .OIDCEnabled}}
+<p class="muted">or</p>
+<form method="get" action="/oidc/login">
+  <button type="submit">Log in with OIDC</button>
+</form>
+{{end}}
 {{template "foot" .}}{{end}}
 
 {{define "token"}}{{template "head" .}}

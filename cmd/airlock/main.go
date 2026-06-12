@@ -40,6 +40,10 @@ const (
 	defaultTokenTTL  = 12 * time.Hour
 )
 
+// oidcDiscoveryTimeout bounds the OIDC provider discovery at startup so an
+// unreachable issuer cannot hang the boot; on timeout, local login still serves.
+const oidcDiscoveryTimeout = 10 * time.Second
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -186,10 +190,27 @@ func buildWebServer(cfg *config.Config, g *gateway.Gateway, logger *slog.Logger)
 	sessions := webauth.NewSessionStore(ttl, nil)
 	g.SetTokenResolver(sessions)
 
+	web := webauth.NewServer(users, sessions, logger)
+
+	// Optional OIDC/SSO login, a second identity source alongside local
+	// accounts. Provider discovery reaches the issuer, so a failure here must
+	// NOT break startup or local login: log and continue with local-only login.
+	if o := cfg.Web.OIDC; o != nil && o.Enable {
+		ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+		provider, err := webauth.NewOIDCProvider(ctx, o)
+		cancel()
+		if err != nil {
+			logger.Warn("oidc disabled: provider setup failed; local login unaffected", "error", err)
+		} else {
+			web.EnableOIDC(provider, o)
+			logger.Info("airlock oidc login enabled", "issuer", o.Issuer)
+		}
+	}
+
 	addr := cfg.Web.Listen
 	if addr == "" {
 		addr = defaultWebListen
 	}
 	logger.Info("airlock web login front-end enabled", "addr", addr, "token_ttl", ttl)
-	return &http.Server{Addr: addr, Handler: webauth.NewServer(users, sessions, logger).Handler()}, nil
+	return &http.Server{Addr: addr, Handler: web.Handler()}, nil
 }
