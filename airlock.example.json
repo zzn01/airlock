@@ -1,6 +1,34 @@
 {
   "listen": ":8080",
   "mcp": { "enable": true, "listen": ":8081", "path": "/mcp" },
+  "web": {
+    "enable": true,
+    "listen": ":8082",
+    "users_file": "/var/lib/airlock/users.json",
+    "token_ttl": "12h",
+    "bootstrap": {
+      "username": "admin",
+      "password": "env:AIRLOCK_ADMIN_PASSWORD",
+      "groups": ["sre"]
+    },
+    "oidc": {
+      "enable": true,
+      "issuer": "https://idp.example.com/realms/airlock",
+      "client_id": "airlock",
+      "client_secret": "env:AIRLOCK_OIDC_CLIENT_SECRET",
+      "redirect_url": "https://airlock.example.com:8082/oidc/callback",
+      "scopes": ["openid", "profile", "email", "groups"],
+      "groups_claim": "groups",
+      "group_mapping": {
+        "platform-oncall": ["sre"],
+        "checkout-devs": ["team-checkout"],
+        "payments-devs": ["team-payments"]
+      },
+      "overrides": [
+        { "email": "lead@example.com", "groups": ["sre", "team-payments"] }
+      ]
+    }
+  },
   "groups": ["team-checkout", "team-payments", "sre"],
   "clients": [
     {

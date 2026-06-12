@@ -89,6 +89,29 @@ mechanism the gateway uses.
 - A request with a valid token gets a per-connection MCP server whose tool list
   is filtered to that client's identity (below).
 
+### Sessions are bound to the authenticating client
+
+The streamable transport is stateful: an `initialize` call mints an
+`Mcp-Session-Id`, and the per-session tool handlers close over the **session
+creator's** token (the identity used to dispatch every subsequent call on that
+session). Authenticating each request against *some* valid client is therefore
+not enough — if a session were reusable by any valid token, a client that
+learned another client's `Mcp-Session-Id` could ride that session with the
+creator's identity, grants, token, and pinned tenancy (a cross-principal authz +
+multi-tenant isolation break).
+
+To prevent this, **every MCP session is bound to the client that created it**.
+Authentication is the SDK's `auth.RequireBearerToken` middleware, whose verifier
+resolves the token (via `Gateway.ResolveClient`, so static config clients and
+web-issued tokens bind identically) and records a `TokenInfo` carrying a stable
+per-client user id — the resolved client identity (never empty; it falls back to
+a token-derived id so the binding guard can never sit inert). The streamable
+transport captures that user id when the session is created and rejects with
+`403` any later request on the same session whose user id differs. A new session
+authenticated as a different client still initializes normally; only reuse of an
+*existing* session by a different principal is denied, before any tool handler
+runs.
+
 ## Tool generation and authorization filtering
 
 Tools are generated from a static **catalog** that maps each curated operation

@@ -13,9 +13,9 @@ import (
 // Gateway itself is an http.Handler via ServeHTTP; the MCP adapter holds no
 // authorization or tenancy logic of its own.
 
-// Config returns the gateway's configuration. The MCP adapter uses it to
-// resolve a bearer token to a client (ClientByToken) and to read group/grant
-// membership when deciding which tools to expose.
+// Config returns the gateway's configuration. The MCP adapter uses it to read
+// group/grant membership when deciding which tools to expose. Token resolution
+// goes through Gateway.ResolveClient so web-issued tokens are accepted too.
 func (g *Gateway) Config() *config.Config { return g.cfg }
 
 // Proxies returns the httpproxy instance manager, used to enumerate reachable

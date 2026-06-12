@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/zzn01/airlock/internal/backend/httpproxy"
 )
@@ -20,6 +21,58 @@ type Config struct {
 	Clients  []Client   `json:"clients"`
 	Backends Backends   `json:"backends"`
 	MCP      *MCPServer `json:"mcp"`
+	Web      *WebAuth   `json:"web"`
+}
+
+// WebAuth configures the optional local-account web login front-end. It runs
+// alongside the HTTP gateway on its own listen address and issues short-lived
+// bearer tokens that resolve to a user's groups through the same access-control
+// core static config clients use. When nil or disabled, no web login is served.
+type WebAuth struct {
+	Enable    bool           `json:"enable"`
+	Listen    string         `json:"listen"`     // default ":8082" (applied by the caller)
+	UsersFile string         `json:"users_file"` // path to the persisted local user store
+	TokenTTL  string         `json:"token_ttl"`  // session lifetime as a Go duration, e.g. "12h"; default 12h
+	Bootstrap *BootstrapUser `json:"bootstrap"`  // optional initial user created at startup if absent
+	OIDC      *OIDC          `json:"oidc"`       // optional OIDC/SSO login, served alongside local accounts
+}
+
+// OIDC configures the optional OIDC/SSO login, a second identity source served
+// alongside local accounts within the web front-end. When nil or disabled, only
+// local login is offered; a disabled or unreachable provider never breaks local
+// login. Group membership is derived from a configurable ID-token claim (and an
+// optional admin override) and then drives the same access-control core as every
+// other identity. ClientSecret is a secret reference (env:/file:/plain).
+type OIDC struct {
+	Enable       bool                `json:"enable"`
+	Issuer       string              `json:"issuer"`        // OIDC issuer URL (discovery base)
+	ClientID     string              `json:"client_id"`     // OAuth2 client id
+	ClientSecret string              `json:"client_secret"` // OAuth2 client secret (secret reference)
+	RedirectURL  string              `json:"redirect_url"`  // this server's /oidc/callback URL
+	Scopes       []string            `json:"scopes"`        // default ["openid","profile","email"]
+	GroupsClaim  string              `json:"groups_claim"`  // ID-token claim holding group values; default "groups"
+	GroupMapping map[string][]string `json:"group_mapping"` // IdP claim value -> airlock group names
+	Overrides    []OIDCOverride      `json:"overrides"`     // admin manual per-user group overrides (override-first)
+}
+
+// OIDCOverride pins a specific authenticated user to a fixed set of airlock
+// groups, taking precedence over the claim-derived groups. A user matches when
+// the override's Subject equals the OIDC `sub` claim or its Email equals the
+// `email` claim. It is the operator's escape hatch independent of the IdP's
+// asserted groups.
+type OIDCOverride struct {
+	Subject string   `json:"subject"`
+	Email   string   `json:"email"`
+	Groups  []string `json:"groups"`
+}
+
+// BootstrapUser is an initial local account created at startup when the user
+// store does not already contain it, so a fresh deployment has a way in without
+// hardcoded credentials. The password is a secret reference (env:/file:/plain).
+type BootstrapUser struct {
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	Groups   []string `json:"groups"`
 }
 
 // MCPServer configures the optional MCP (Model Context Protocol) front-end. It
@@ -160,6 +213,70 @@ func (c *Config) Validate() error {
 
 	if c.MCP != nil && c.MCP.Enable && c.MCP.Path != "" && !strings.HasPrefix(c.MCP.Path, "/") {
 		return fmt.Errorf("mcp path %q must begin with %q", c.MCP.Path, "/")
+	}
+
+	if c.Web != nil && c.Web.Enable {
+		if c.Web.UsersFile == "" {
+			return fmt.Errorf("web: users_file is required when web login is enabled")
+		}
+		if c.Web.TokenTTL != "" {
+			d, err := time.ParseDuration(c.Web.TokenTTL)
+			if err != nil {
+				return fmt.Errorf("web: token_ttl %q: %w", c.Web.TokenTTL, err)
+			}
+			if d <= 0 {
+				return fmt.Errorf("web: token_ttl %q must be positive", c.Web.TokenTTL)
+			}
+		}
+		if b := c.Web.Bootstrap; b != nil {
+			if b.Username == "" {
+				return fmt.Errorf("web: bootstrap user has an empty username")
+			}
+			for _, g := range b.Groups {
+				if !defined[g] {
+					return fmt.Errorf("web: bootstrap user %q references undefined group %q", b.Username, g)
+				}
+			}
+		}
+		if o := c.Web.OIDC; o != nil && o.Enable {
+			if err := o.validate(defined); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validate checks an enabled OIDC block: the required provider fields are
+// present and every group produced by the claim mapping or an override is a
+// defined group (a typo fails fast rather than silently granting nothing).
+func (o *OIDC) validate(defined map[string]bool) error {
+	for field, val := range map[string]string{
+		"issuer":        o.Issuer,
+		"client_id":     o.ClientID,
+		"client_secret": o.ClientSecret,
+		"redirect_url":  o.RedirectURL,
+	} {
+		if val == "" {
+			return fmt.Errorf("web.oidc: %s is required when OIDC is enabled", field)
+		}
+	}
+	for claim, groups := range o.GroupMapping {
+		for _, g := range groups {
+			if !defined[g] {
+				return fmt.Errorf("web.oidc: group_mapping for %q references undefined group %q", claim, g)
+			}
+		}
+	}
+	for i, ov := range o.Overrides {
+		if ov.Subject == "" && ov.Email == "" {
+			return fmt.Errorf("web.oidc: overrides[%d] must set subject or email", i)
+		}
+		for _, g := range ov.Groups {
+			if !defined[g] {
+				return fmt.Errorf("web.oidc: override %d references undefined group %q", i, g)
+			}
+		}
 	}
 	return nil
 }

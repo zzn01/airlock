@@ -67,6 +67,84 @@ Tools include `redis_get`/`redis_scan`/`redis_exists`/`redis_ttl`,
 `grafana_search`, and `grafana_ds_query`. See
 `docs/design/2026-06-11-airlock-mcp-server.md`.
 
+## Web login (local accounts)
+
+airlock can serve a minimal **web login** so human users obtain a token without
+a static config entry. Enable it with a `web` config section:
+
+```json
+"web": {
+  "enable": true,
+  "listen": ":8082",
+  "users_file": "/var/lib/airlock/users.json",
+  "token_ttl": "12h",
+  "bootstrap": { "username": "admin", "password": "env:AIRLOCK_ADMIN_PASSWORD", "groups": ["sre"] }
+}
+```
+
+- `enable` — turn the web login on (default off).
+- `listen` — its own listen address (default `:8082`), separate from the gateway
+  and MCP server and from the health probes.
+- `users_file` — JSON file of local accounts (username, bcrypt hash, groups),
+  persisted with `0600` perms; its parent directory must exist.
+- `token_ttl` — issued-token lifetime as a Go duration (default `12h`).
+- `bootstrap` — optional initial account created at startup if absent; its
+  `password` is a secret reference (`env:`/`file:`/plain), so no credential is
+  hardcoded.
+
+A user logs in at `GET /login`, and on success is shown a short-lived **opaque
+bearer token** to paste into a gateway or MCP client (`Authorization: Bearer
+<token>` or `X-API-Key: <token>`). The token is bound server-side to the user's
+groups and resolves through the **same** access-control core as a static config
+client — groups → backend `allowed_groups` → `(group, backend)` grants → data
+scope. Static config tokens keep working unchanged and take precedence on any
+overlap. `POST /logout` revokes the current token immediately; a process restart
+revokes all issued tokens (the user store persists, sessions do not). See
+`docs/design/2026-06-11-airlock-web-auth.md`.
+
+### OIDC / SSO login
+
+The web front-end can additionally offer **OIDC/SSO login** as a second identity
+source next to local accounts. Add an `oidc` block inside `web`:
+
+```json
+"oidc": {
+  "enable": true,
+  "issuer": "https://idp.example.com/realms/airlock",
+  "client_id": "airlock",
+  "client_secret": "env:AIRLOCK_OIDC_CLIENT_SECRET",
+  "redirect_url": "https://airlock.example.com:8082/oidc/callback",
+  "scopes": ["openid", "profile", "email", "groups"],
+  "groups_claim": "groups",
+  "group_mapping": { "platform-oncall": ["sre"], "checkout-devs": ["team-checkout"] },
+  "overrides": [ { "email": "lead@example.com", "groups": ["sre", "team-payments"] } ]
+}
+```
+
+- `enable` — turn OIDC on (default off). When on, the login page shows both the
+  local form and a "Log in with OIDC" button; when off, only the local form.
+- `issuer` / `client_id` / `client_secret` / `redirect_url` — standard OAuth2
+  authorization-code parameters; `client_secret` is a secret reference
+  (`env:`/`file:`/plain). `redirect_url` must point at this server's
+  `/oidc/callback`.
+- `scopes` — requested scopes (default `openid`, `profile`, `email`).
+- `groups_claim` — the ID-token claim carrying the user's IdP groups/roles
+  (default `groups`).
+- `group_mapping` — maps each IdP claim value to one or more **airlock** group
+  names; the user's airlock groups are the de-duplicated union. An unmapped IdP
+  value grants nothing (default-deny).
+- `overrides` — optional admin escape hatch: pin a user (matched by OIDC
+  `subject` or `email`) to a fixed set of groups, taking precedence over the
+  claim mapping.
+
+On successful authentication airlock derives the user's groups (override first,
+else the claim mapping) and issues the **same** opaque token local login issues,
+so the gateway and MCP server resolve it identically. The flow uses standard
+`state` (CSRF) and `nonce` (replay) protection. OIDC being disabled, or its
+provider unreachable at startup, never affects local login — airlock logs a
+warning and serves local login only. See
+`docs/design/2026-06-12-airlock-oidc-login.md`.
+
 ## Deployment
 
 A multi-stage `Dockerfile` builds a static binary onto a minimal non-root

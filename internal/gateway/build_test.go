@@ -11,8 +11,14 @@ import (
 
 func TestExampleConfigLoadsAndBuilds(t *testing.T) {
 	// The example config sources the Grafana upstream token via env:GRAFANA_TOKEN,
-	// so the secret reference must resolve for the load to succeed.
-	cfg, err := config.Load("../../airlock.example.json", map[string]string{"GRAFANA_TOKEN": "Bearer test-token"})
+	// the web bootstrap password via env:AIRLOCK_ADMIN_PASSWORD, and the OIDC
+	// client secret via env:AIRLOCK_OIDC_CLIENT_SECRET, so every secret reference
+	// must resolve for the load to succeed.
+	cfg, err := config.Load("../../airlock.example.json", map[string]string{
+		"GRAFANA_TOKEN":              "Bearer test-token",
+		"AIRLOCK_ADMIN_PASSWORD":     "test-admin-password",
+		"AIRLOCK_OIDC_CLIENT_SECRET": "test-oidc-secret",
+	})
 	if err != nil {
 		t.Fatalf("load example config: %v", err)
 	}
